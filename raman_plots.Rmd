@@ -1,0 +1,300 @@
+---
+title: "Raman Plots"
+output:   
+  html_notebook: 
+    toc: true
+    toc_float: true
+---
+
+## Set Up
+
+This uses algorithms from `baselineWavelet`, so we need to install this if 
+it hasn't been installed. 
+
+```{r}
+if (!("baselineWavelet" %in% installed.packages())){
+  httr::set_config( httr::config( ssl_verifypeer = 0L ) )
+  devtools::install_github("zmzhang/baselineWavelet")
+}
+# Magrittr pipe
+`%>%` <- dplyr::`%>%`
+```
+
+### Directories and Files
+
+The plots we make will be saved to this directory.
+
+```{r}
+# Path to output directory
+plots_dir <- "plots"
+
+# Create the plots_dir if it does not exist
+if (!dir.exists(plots_dir)) {
+  dir.create(plots_dir)
+}
+
+# Call the plot what you would like it to be saved as
+plot_filename <- "raman_plot.png"
+```
+
+Any files that are in this directory will be run. 
+
+```{r}
+# Path to input directory
+input_dir <- "input_data"
+
+# Get the list of files from here
+input_files <- list.files(input_dir, 
+                    pattern="^.*\\.(csv|CSV)$", full.names = TRUE)
+
+# Print out file names in this directory
+cat(
+  "The following files will be run: \n",
+  paste(input_files, collapse = "\n")
+)
+```
+
+## Specify the pressures and ranges for each file
+
+Name the pressures for each file and make a table that explains the 
+samples being plotted. 
+
+**Double check the table printed out that it has the accurate pressure and range labels.**
+
+```{r}
+# Make a data.frame with each samples' information
+sample_df <- data.frame(input_files, 
+                        pressure = rep(c("20GPa", "40GPa"), 3), 
+                        range = factor(c("high", "high", "low", "low", "mid", "mid"), 
+                                       levels = c("low", "mid", "high")),
+                        stringsAsFactors = FALSE
+                        ) %>% 
+  dplyr::mutate(wave_min = dplyr::recode(range, 
+                          "low" = 200, 
+                          "mid" = 1500, 
+                          "high" = 3000
+                        ),
+                wave_max = dplyr::recode(range, 
+                          "low" = 1500, 
+                          "mid" = 1800, 
+                          "high" = 3500)
+                ) %>%
+  dplyr::arrange(pressure, range)
+
+# Print out the table so it can be double checked
+knitr::kable(sample_df)
+```
+
+## Set up special functions
+
+```{r}
+read_n_correct <- function(filename, wavenum_min = 0, wavenum_max = 4000) {
+  # Will background correct and identify peaks for a given vibration dataset 
+  # saved as a CSV file from
+  #
+  # Args:
+  #   filename : A file path to to a vibration CSV file that has two columns
+  #             The first column is wavenumber and the second is intensity.
+  #   wavenum_min/max : two numbers which specify the range of numbers to keep in 
+  #                    the dataset. Wavenumbers outside these ranges will be 
+  #                    removed from the data.frame
+  #
+  # Returns:
+  # A data.frame with background corrected intensities and peaks identified. 
+  # Get file.path
+  # 
+  filename <- file.path(filename)
+  
+  # Check if the file actually exists
+  if(!file.exists(filename)){
+    stop(paste("No file at the given file path."))
+  }
+  
+  # Read in the CSV data file colnames will be ignored
+  vibration_df <- readr::read_csv(filename, col_names = FALSE) %>% 
+    # Save the sensible column names
+    dplyr::rename("wavenumber" = X1, 
+                  "intensity" = X2) 
+  # Establish the scale
+  scales <- seq(1, 120, 1)
+  
+  # Find Continuous Wavelet Transform
+  w_coefs <-  baselineWavelet::cwt(vibration_df$intensity,
+                                   # The scales at which to perform CWT
+                                   scales = scales, 
+                                   # Which wavelet base to use
+                                   wavelet = 'mexh')
+  # Make this dat into an image
+	print(
+	  image(1:nrow(w_coefs), 
+	        scales,
+	        w_coefs, 
+	        col = rainbow(256), 
+	        axes = FALSE, 
+	        xlab = 'index', 
+	        ylab = 'CWT coefficient scale', 
+	        main = 'CWT coefficients')
+	)
+
+	# Identify the local maximum of each column in 2-D CWT coefficients matrix
+	# by using a slide window
+	local_max <- baselineWavelet::getLocalMaximumCWT(w_coefs, 
+	                                                # Minimum window 
+	                                                minWinSize = 0.5)
+  # Identify ridges by connecting the local maximum of 2-D 
+	ridge_list <- baselineWavelet::getRidge(local_max,
+	                                        gapTh = 3, 
+	                                        skip = NULL)
+	
+	# Identify the major peaks
+	major_peak_info <- baselineWavelet::identifyMajorPeaks(vibration_df$intensity,
+	                                                       ridge_list,
+	                                                       w_coefs,
+	                                                       SNR.Th = 0.2,
+	                                                       ridgeLength = 1,
+	                                                       nearbyPeak = TRUE)
+	# Estimate peak width
+	peak_width <- baselineWavelet::widthEstimationCWT(vibration_df$intensity,
+	                                                  major_peak_info)
+	# Plot the ridge list
+	baselineWavelet::plotRidgeList(ridge_list)
+	
+	# Make the data.frame with the corrected data columns. 
+	vibration_df <- vibration_df %>% 
+	  dplyr::mutate(
+	    # Make background a new column based on intensity column
+	    background = baselineWavelet::baselineCorrectionCWT(
+	      intensity,
+	      peak_width,
+	      lambda = 1000,
+	      differences = 1),
+	    # Save corrected intensity as a new column 
+	    corrected_intensity = intensity - background, 
+	    # Save binned column
+	    binned = lowess(wavenumber, 
+	                    corrected_intensity, 
+	                    f = 0.03)$x, 
+	    # Save uncorrected bin column
+	    uncorrected_bin = lowess(wavenumber, 
+	                             intensity, 
+	                             f = 0.03)$x, 
+	    # Save new column that says which are major peaks
+	    major_peak = (1:nrow(.) %in% major_peak_info$peakIndex)
+	    ) %>% 
+	  dplyr::filter(wavenumber > wavenum_min, 
+	                wavenumber < wavenum_max) 
+	
+	# Return the data.frame with the corrected columns
+	return(vibration_df)
+}
+```
+
+Function for plotting the individual peaks
+
+```{r}
+plot_ind_peaks <- function(vibration_df) {
+  # Given a vibration data.frame that has been corrected already using 
+  # `read_n_correct` function, make an individual peak shape for ultimate plot
+  #
+  # Args:
+  #   vibration_df : A corrected vibration dataset as a data.frame with 
+  #                  `corrected_intensity`, `wavenumber` and `major_peak` as 
+  #                  columns. 
+  #
+  # Returns:
+  # A data.frame with background corrected intensities. 
+  
+  # Make a plot with no axises or other stuff, but has the peaks
+	ggplot2::ggplot(vibration_df) + 
+	  ggplot2::geom_line(ggplot2::aes(x = wavenumber, 
+	                                  y = corrected_intensity)) +
+	  ggplot2::geom_point(data = subset(vibration_df, major_peak), 
+	                      ggplot2::aes(x = wavenumber, 
+	                                   y = corrected_intensity, 
+	                                   shape = major_peak)) +
+	  ggplot2::theme_classic() + 
+    # Make everything blank because we just want the peak shape
+    ggplot2::theme(legend.position = "none", 
+                   axis.ticks.y = ggplot2::element_blank(),
+                   axis.text.y = ggplot2::element_blank(),
+                   axis.title.x = ggplot2::element_blank(),
+                   axis.title.y = ggplot2::element_blank(), 
+                   axis.line = ggplot2::element_blank()) 
+}
+```
+
+## Run each data file through the correction algorithms
+
+Use the specialized function to import and correct the data from each file.
+
+```{r}
+# Read, background correct, and identify peaks of each sample
+corrected_datasets <- apply(sample_df, 1, 
+                            function(file) {
+                            read_n_correct(filename = file['input_files'], 
+                                           wavenum_min = file['wave_min'],
+                                           wavenum_max = file['wave_max'])
+                              })
+
+# Bring along the sample labels
+names(corrected_datasets) <- paste0(sample_df$pressure, sample_df$range, each = "")
+```
+
+## Obtain a individual plot for each corrected dataset
+
+```{r}
+peak_plots <- lapply(corrected_datasets, 
+                     plot_ind_peaks)
+
+names(peak_plots) <- paste0(sample_df$pressure, sample_df$range, each = "")
+```
+
+## Assemble the main plot
+
+Put together all the peak plots into one grid. 
+
+```{r}
+ultimate_plot <- cowplot::plot_grid(plotlist = peak_plots,
+          align = "hv", 
+          axis = "lbt",
+          label_x = "Wavelength / nm", 
+          label_y = "Raman Intensity/Arbitr. Units")
+```
+
+Declare x and y labels and main title. 
+
+```{r}
+# Declare the x label
+x_lab <- grid::textGrob("Wavelength / nm")
+
+# Declare the y label
+y_lab <- grid::textGrob("Raman Intensity/Arbitr. Units", rot = 90)
+
+# Declare the main title
+main_title <- grid::textGrob("The background-correction of Raman Spectra")
+```
+
+Add these labels to the main plot!
+
+```{r}
+ultimate_plot <- gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(ultimate_plot, 
+                         left = y_lab, 
+                         bottom = x_lab, 
+                         top = main_title)
+  )
+```
+
+Save plot to a png
+
+```{r}
+cowplot::save_plot(filename = file.path(plots_dir, plot_filename), 
+                   plot = ultimate_plot)
+```
+
+## Session Info
+
+```{r}
+sessionInfo()
+```
+
