@@ -4,6 +4,8 @@ output:
   html_notebook: 
     toc: true
     toc_float: true
+author: Candace Savonen
+date: 2020
 ---
 
 ## Set Up
@@ -12,12 +14,23 @@ This uses algorithms from `baselineWavelet`, so we need to install this if
 it hasn't been installed. 
 
 ```{r}
+# magrittr pipe
+`%>%` <- dplyr::`%>%`
+
+if (!("tidyverse" %in% installed.packages())){
+  install.packages("tidyverse")
+}
+
 if (!("baselineWavelet" %in% installed.packages())){
-  httr::set_config( httr::config( ssl_verifypeer = 0L ) )
+  httr::set_config( httr::config(ssl_verifypeer = 0L))
   devtools::install_github("zmzhang/baselineWavelet")
 }
-# Magrittr pipe
-`%>%` <- dplyr::`%>%`
+
+if (!("patchwork" %in% installed.packages())){
+devtools::install_github("thomasp85/patchwork")
+}
+
+library(patchwork)
 ```
 
 ### Directories and Files
@@ -50,7 +63,7 @@ input_files <- list.files(input_dir,
 # Print out file names in this directory
 cat(
   "The following files will be run: \n",
-  paste(input_files, collapse = "\n")
+  paste0(input_files, collapse = "\n ")
 )
 ```
 
@@ -88,7 +101,9 @@ knitr::kable(sample_df)
 ## Set up special functions
 
 ```{r}
-read_n_correct <- function(filename, wavenum_min = 0, wavenum_max = 4000) {
+read_n_correct <- function(filename, 
+                           wavenum_min = 0, 
+                           wavenum_max = 4000) {
   # Will background correct and identify peaks for a given vibration dataset 
   # saved as a CSV file from
   #
@@ -200,6 +215,8 @@ plot_ind_peaks <- function(vibration_df) {
   #   vibration_df : A corrected vibration dataset as a data.frame with 
   #                  `corrected_intensity`, `wavenumber` and `major_peak` as 
   #                  columns. 
+  #   x_lab: x axis label 
+  #   y_lab: y axis label
   #
   # Returns:
   # A data.frame with background corrected intensities. 
@@ -213,13 +230,53 @@ plot_ind_peaks <- function(vibration_df) {
 	                                   y = corrected_intensity, 
 	                                   shape = major_peak)) +
 	  ggplot2::theme_classic() + 
+    ggplot2::xlab("") + 
+    ggplot2::ylab("") +
     # Make everything blank because we just want the peak shape
     ggplot2::theme(legend.position = "none", 
-                   axis.ticks.y = ggplot2::element_blank(),
-                   axis.text.y = ggplot2::element_blank(),
-                   axis.title.x = ggplot2::element_blank(),
-                   axis.title.y = ggplot2::element_blank(), 
                    axis.line = ggplot2::element_blank()) 
+}
+```
+
+Make quick little functions that remove axis ticks and labels. 
+
+```{r}
+remove_x_axis <- function(gplot) {
+  gplot <- gplot + ggplot2::theme(
+  axis.title.x = ggplot2::element_blank(),
+  axis.text.x = ggplot2::element_blank(),
+  axis.ticks.x = ggplot2::element_blank())
+  
+  return(gplot)
+}
+```
+
+Same kind of function but for y axis. 
+
+```{r}
+remove_y_axis <- function(gplot) {
+  gplot <- gplot + ggplot2::theme(
+  axis.title.y = ggplot2::element_blank(),
+  axis.text.y = ggplot2::element_blank(),
+  axis.ticks.y = ggplot2::element_blank())
+  
+  return(gplot)
+}
+```
+
+Wrapper function that does both. 
+
+```{r}
+remove_axes <- function(gplot) {
+  gplot <- gplot + ggplot2::theme(
+  axis.title.y = ggplot2::element_blank(),
+  axis.text.y = ggplot2::element_blank(),
+  axis.ticks.y = ggplot2::element_blank(), 
+  axis.title.x = ggplot2::element_blank(),
+  axis.text.x = ggplot2::element_blank(),
+  axis.ticks.x = ggplot2::element_blank())
+  
+  return(gplot)
 }
 ```
 
@@ -246,50 +303,113 @@ names(corrected_datasets) <- paste0(sample_df$pressure, sample_df$range, each = 
 peak_plots <- lapply(corrected_datasets, 
                      plot_ind_peaks)
 
-names(peak_plots) <- paste0(sample_df$pressure, sample_df$range, each = "")
+names(peak_plots) <- paste0(sample_df$pressure, 
+                            sample_df$range, 
+                            each = "")
 ```
 
 ## Assemble the main plot
 
 Put together all the peak plots into one grid. 
+Assemble by row. 
 
 ```{r}
-ultimate_plot <- cowplot::plot_grid(plotlist = peak_plots,
-          align = "hv", 
-          axis = "lbt",
-          label_x = "Wavelength / nm", 
-          label_y = "Raman Intensity/Arbitr. Units")
+n_rows <- 2
 ```
+
+Assemble first row. 
+
+```{r}
+first_row <- 
+  remove_x_axis(peak_plots$`20GPalow`)  +
+  remove_axes(peak_plots$`20GPamid`) + 
+  remove_axes(peak_plots$`20GPahigh`)
+```
+
+Assemble second row. 
+
+```{r}
+second_row <- 
+  peak_plots$`40GPalow` +  
+  remove_y_axis(peak_plots$`40GPamid`) +
+  remove_y_axis(peak_plots$`40GPahigh`)
+```
+
+### Combine rows
+
+```{r}
+ultimate_plot <- first_row / second_row 
+```
+
+## Add annotation labels
 
 Declare x and y labels and main title. 
 
 ```{r}
-# Declare the x label
-x_lab <- grid::textGrob("Wavelength / nm")
-
-# Declare the y label
-y_lab <- grid::textGrob("Raman Intensity/Arbitr. Units", rot = 90)
-
 # Declare the main title
-main_title <- grid::textGrob("The background-correction of Raman Spectra")
+main_title <- "The background-correction of Raman Spectra"
+
+# Declare x label
+x_lab <- "Wavelength / nm"
+
+# Declare y label
+y_lab <- "Raman Intensity/Arbitr. Units"
 ```
 
-Add these labels to the main plot!
+Set up the formatting of our x and y labels. 
 
 ```{r}
-ultimate_plot <- gridExtra::grid.arrange(
-  gridExtra::arrangeGrob(ultimate_plot, 
-                         left = y_lab, 
-                         bottom = x_lab, 
-                         top = main_title)
+x_lab <- wrap_elements(grid::textGrob(x_lab)) + 
+  ggplot2::theme(
+    plot.margin = ggplot2::unit(c(.001, .001, .001, .001), "cm")
+    )
+
+y_lab <- wrap_elements(grid::textGrob(y_lab, rot = 90)) + 
+  ggplot2::theme(
+    plot.margin = ggplot2::unit(c(.01, .01, .01, .01), "cm")
+    )
+```
+
+Tack on the axis labels first.
+
+```{r}
+ultimate_plot <- 
+  # Start with y label
+  (y_lab + ultimate_plot) +
+   plot_layout(
+    widths = c(0.15, 5) # Adjust spacing 
+    ) 
+
+ultimate_plot <- 
+  (ultimate_plot / x_lab) + 
+  # Adjust spacing 
+  plot_layout(
+    heights = c(5, 0.5) # Adjust spacing 
+    )
+```
+
+Add title. 
+
+```{r}
+ultimate_plot <- ultimate_plot + 
+  plot_annotation(
+  title = ggplot2::element_text(main_title),
   )
+```
+
+Print out preview of the final plot. 
+
+```{r}
+ultimate_plot
 ```
 
 Save plot to a png
 
 ```{r}
-cowplot::save_plot(filename = file.path(plots_dir, plot_filename), 
-                   plot = ultimate_plot)
+ggplot2::ggsave(
+  filename = file.path(plots_dir, plot_filename), 
+  plot = ultimate_plot, 
+  width = 10)
 ```
 
 ## Session Info
