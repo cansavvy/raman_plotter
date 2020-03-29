@@ -47,7 +47,7 @@ if (!dir.exists(plots_dir)) {
 }
 
 # Call the plot what you would like it to be saved as
-plot_filename <- "raman_plot.png"
+plot_filename <- "raman_plot_testing.png"
 ```
 
 Any files that are in this directory will be run. 
@@ -98,6 +98,13 @@ sample_df <- data.frame(input_files,
 knitr::kable(sample_df)
 ```
 
+Determine widths of each plot.
+
+```{r}
+sample_df <- sample_df %>% 
+  dplyr::mutate(width = wave_max - wave_min)
+```
+
 ## Set up special functions
 
 ```{r}
@@ -117,7 +124,6 @@ read_n_correct <- function(filename,
   # Returns:
   # A data.frame with background corrected intensities and peaks identified. 
   # Get file.path
-  # 
   filename <- file.path(filename)
   
   # Check if the file actually exists
@@ -196,18 +202,20 @@ read_n_correct <- function(filename,
 	    # Save new column that says which are major peaks
 	    major_peak = (1:nrow(.) %in% major_peak_info$peakIndex)
 	    ) %>% 
-	  dplyr::filter(wavenumber > wavenum_min, 
-	                wavenumber < wavenum_max) 
-	
+	  # Filter out wavenumbers larger or smaller
+	  dplyr::filter(wavenumber >= as.numeric(wavenum_min) - 10, 
+	                wavenumber <= as.numeric(wavenum_max) + 10)
+
 	# Return the data.frame with the corrected columns
 	return(vibration_df)
 }
 ```
 
-Function for plotting the individual peaks
+Function for plotting the individual peaks.
 
 ```{r}
-plot_ind_peaks <- function(vibration_df) {
+plot_ind_peaks <- function(vibration_df, 
+                           x_interval = 200) {
   # Given a vibration data.frame that has been corrected already using 
   # `read_n_correct` function, make an individual peak shape for ultimate plot
   #
@@ -215,9 +223,7 @@ plot_ind_peaks <- function(vibration_df) {
   #   vibration_df : A corrected vibration dataset as a data.frame with 
   #                  `corrected_intensity`, `wavenumber` and `major_peak` as 
   #                  columns. 
-  #   x_lab: x axis label 
-  #   y_lab: y axis label
-  #
+  #   x_interval: A number indicating what interval you want ticks on the x axis
   # Returns:
   # A data.frame with background corrected intensities. 
   
@@ -225,11 +231,13 @@ plot_ind_peaks <- function(vibration_df) {
 	ggplot2::ggplot(vibration_df) + 
 	  ggplot2::geom_line(ggplot2::aes(x = wavenumber, 
 	                                  y = corrected_intensity)) +
-	  ggplot2::geom_point(data = subset(vibration_df, major_peak), 
-	                      ggplot2::aes(x = wavenumber, 
-	                                   y = corrected_intensity, 
-	                                   shape = major_peak)) +
 	  ggplot2::theme_classic() + 
+    # Set ticks for every 300
+    ggplot2::scale_x_continuous(
+      breaks = signif(seq(from = min(vibration_df$wavenumber),
+                          to = max(vibration_df$wavenumber), 
+                          by = x_interval), 
+                      digits = 2)) + 
     ggplot2::xlab("") + 
     ggplot2::ylab("") +
     # Make everything blank because we just want the peak shape
@@ -287,10 +295,10 @@ Use the specialized function to import and correct the data from each file.
 ```{r}
 # Read, background correct, and identify peaks of each sample
 corrected_datasets <- apply(sample_df, 1, 
-                            function(file) {
-                            read_n_correct(filename = file['input_files'], 
-                                           wavenum_min = file['wave_min'],
-                                           wavenum_max = file['wave_max'])
+                            function(file_row) {
+                            read_n_correct(filename = file_row['input_files'], 
+                                           wavenum_min = tibble::deframe(file_row['wave_min']),
+                                           wavenum_max = tibble::deframe(file_row['wave_max']))
                               })
 
 # Bring along the sample labels
@@ -321,18 +329,30 @@ Assemble first row.
 
 ```{r}
 first_row <- 
-  remove_x_axis(peak_plots$`20GPalow`)  +
+  remove_axes(peak_plots$`20GPalow`)  +
   remove_axes(peak_plots$`20GPamid`) + 
-  remove_axes(peak_plots$`20GPahigh`)
+  remove_axes(peak_plots$`20GPahigh`)  +
+   plot_layout(
+    widths = c(sample_df %>% 
+                 dplyr::filter(pressure == "20GPa")%>% 
+                 dplyr::pull(width)
+               ) # Make widths relative 
+    ) 
 ```
 
 Assemble second row. 
 
 ```{r}
 second_row <- 
-  peak_plots$`40GPalow` +  
+  remove_y_axis(peak_plots$`40GPalow`) +  
   remove_y_axis(peak_plots$`40GPamid`) +
-  remove_y_axis(peak_plots$`40GPahigh`)
+  remove_y_axis(peak_plots$`40GPahigh`) +
+   plot_layout(
+    widths = c(sample_df %>% 
+                 dplyr::filter(pressure == "40GPa")%>% 
+                 dplyr::pull(width)
+               ) # Make widths relative 
+    ) 
 ```
 
 ### Combine rows
@@ -394,6 +414,8 @@ Add title.
 ultimate_plot <- ultimate_plot + 
   plot_annotation(
   title = ggplot2::element_text(main_title),
+  theme = ggplot2::theme(
+    plot.title = ggplot2::element_text(hjust = 0.5))
   )
 ```
 
@@ -409,7 +431,8 @@ Save plot to a png
 ggplot2::ggsave(
   filename = file.path(plots_dir, plot_filename), 
   plot = ultimate_plot, 
-  width = 10)
+  width = 10, 
+  dpi = 600)
 ```
 
 ## Session Info
