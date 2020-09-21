@@ -13,16 +13,12 @@ date: 2020
 This uses algorithms from `baselineWavelet`, so we need to install this if 
 it hasn't been installed. 
 
-```{r}
-# magrittr pipe
-`%>%` <- dplyr::`%>%`
-
+```{r echo=FALSE}
 if (!("tidyverse" %in% installed.packages())){
   install.packages("tidyverse")
 }
 
 if (!("baselineWavelet" %in% installed.packages())){
-  httr::set_config( httr::config(ssl_verifypeer = 0L))
   devtools::install_github("zmzhang/baselineWavelet")
 }
 
@@ -30,6 +26,10 @@ if (!("patchwork" %in% installed.packages())){
 devtools::install_github("thomasp85/patchwork")
 }
 
+# magrittr pipe
+`%>%` <- dplyr::`%>%`
+
+library(Matrix)
 library(patchwork)
 ```
 
@@ -47,24 +47,69 @@ if (!dir.exists(plots_dir)) {
 }
 
 # Call the plot what you would like it to be saved as
-plot_filename <- "raman_plot_testing.png"
+plot_filename <- "raman_plot.png"
 ```
 
 Any files that are in this directory will be run. 
 
 ```{r}
 # Path to input directory
-input_dir <- "input_data"
+input_dir <- "MAD-X1"
+```
 
+```{r}
 # Get the list of files from here
 input_files <- list.files(input_dir, 
-                    pattern="^.*\\.(csv|CSV)$", full.names = TRUE)
+                          pattern="^.*\\.(csv|CSV)$", 
+                          full.names = TRUE)
+```
 
-# Print out file names in this directory
-cat(
-  "The following files will be run: \n",
-  paste0(input_files, collapse = "\n ")
-)
+Collect experiment information from the file names.
+
+```{r}
+input_df <- data.frame(input_files) %>%
+  # Split up file names into multiple columns so we can handle it easier
+  tidyr::separate(input_files, sep = "_", into = c("file_path", "name", "pressure_pt", "pressure", "wavelength")) %>% 
+  # Save input file paths as their own column too
+  dplyr::mutate(input_files = input_files, 
+                pressure = as.numeric(stringr::str_remove(pressure, " GPa"))) %>% 
+  # Filter to only sets that have P (not dP)
+  dplyr::filter(grepl("^P", pressure_pt)) %>%
+  # Select only the columns we'll move forward with
+  dplyr::select(input_files, pressure_pt, pressure, wavelength)
+
+input_df
+```
+
+Neaten up the wavelength column. 
+
+```{r}
+input_df <- input_df %>%
+  # Make the wavelength column only have the wavelength -- drop the dates
+  dplyr::mutate(wavelength = as.numeric(stringr::word(wavelength, sep = " ", 2))) %>% 
+  # Order the data.frame by the wavelength 
+  dplyr::arrange(pressure, wavelength)
+
+input_df
+```
+
+Where there's a 2800 and a 3200 for an individual pressure, only keep the 3200 file. 
+
+```{r}
+too_many <- input_df %>%
+  dplyr::group_by(pressure)%>%
+  dplyr::summarize(n = dplyr::n()) %>% 
+  dplyr::filter(n > 3) %>% 
+  dplyr::pull(pressure)
+
+input_df <- input_df %>% 
+  dplyr::filter(!(pressure == too_many & wavelength == 2800))
+```
+
+Print out the final version of the data frame with the input files. 
+
+```{r}
+input_df
 ```
 
 ## Specify the pressures and ranges for each file
@@ -76,41 +121,30 @@ samples being plotted.
 
 ```{r}
 # Make a data.frame with each samples' information
-sample_df <- data.frame(input_files, 
-                        pressure = rep(c("20GPa", "40GPa"), 3), 
-                        range = factor(c("high", "high", "low", "low", "mid", "mid"), 
-                                       levels = c("low", "mid", "high")),
-                        stringsAsFactors = FALSE
-                        ) %>% 
-  dplyr::mutate(wave_min = dplyr::recode(range, 
-                          "low" = 200, 
-                          "mid" = 1500, 
-                          "high" = 3000
+sample_df <- input_df %>%
+  dplyr::mutate(wave_min = dplyr::recode(wavelength, 
+                          "375" = 200, 
+                          "2275" = 1500, 
+                          "2800" = 2800, 
+                          "3200" = 2800
                         ),
-                wave_max = dplyr::recode(range, 
-                          "low" = 1500, 
-                          "mid" = 1800, 
-                          "high" = 3500)
-                ) %>%
-  dplyr::arrange(pressure, range)
+                wave_max = dplyr::recode(wavelength, 
+                          "375" = 1310, 
+                          "2275" = 1875, 
+                          "2800" = 3500, 
+                          "3200" = 3500)
+                ) 
 
 # Print out the table so it can be double checked
-knitr::kable(sample_df)
-```
-
-Determine widths of each plot.
-
-```{r}
-sample_df <- sample_df %>% 
-  dplyr::mutate(width = wave_max - wave_min)
+knitr::kable(sample_df %>% dplyr::select(pressure, wavelength, wave_min, wave_max))
 ```
 
 ## Set up special functions
 
 ```{r}
 read_n_correct <- function(filename, 
-                           wavenum_min = 0, 
-                           wavenum_max = 4000) {
+                           wavenum_min, 
+                           wavenum_max) {
   # Will background correct and identify peaks for a given vibration dataset 
   # saved as a CSV file from
   #
@@ -124,6 +158,7 @@ read_n_correct <- function(filename,
   # Returns:
   # A data.frame with background corrected intensities and peaks identified. 
   # Get file.path
+  # 
   filename <- file.path(filename)
   
   # Check if the file actually exists
@@ -140,7 +175,7 @@ read_n_correct <- function(filename,
   scales <- seq(1, 120, 1)
   
   # Find Continuous Wavelet Transform
-  w_coefs <-  baselineWavelet::cwt(vibration_df$intensity,
+  w_coefs <-  cwt(vibration_df$intensity,
                                    # The scales at which to perform CWT
                                    scales = scales, 
                                    # Which wavelet base to use
@@ -159,32 +194,32 @@ read_n_correct <- function(filename,
 
 	# Identify the local maximum of each column in 2-D CWT coefficients matrix
 	# by using a slide window
-	local_max <- baselineWavelet::getLocalMaximumCWT(w_coefs, 
-	                                                # Minimum window 
-	                                                minWinSize = 0.5)
+	local_max <- getLocalMaximumCWT(w_coefs, 
+	                                # Minimum window 
+	                                minWinSize = 0.5)
   # Identify ridges by connecting the local maximum of 2-D 
-	ridge_list <- baselineWavelet::getRidge(local_max,
-	                                        gapTh = 3, 
-	                                        skip = NULL)
+	ridge_list <- getRidge(local_max,
+	                       gapTh = 3, 
+	                       skip = NULL)
 	
 	# Identify the major peaks
-	major_peak_info <- baselineWavelet::identifyMajorPeaks(vibration_df$intensity,
+	major_peak_info <- identifyMajorPeaks(vibration_df$intensity,
 	                                                       ridge_list,
 	                                                       w_coefs,
 	                                                       SNR.Th = 0.2,
 	                                                       ridgeLength = 1,
 	                                                       nearbyPeak = TRUE)
 	# Estimate peak width
-	peak_width <- baselineWavelet::widthEstimationCWT(vibration_df$intensity,
+	peak_width <- widthEstimationCWT(vibration_df$intensity,
 	                                                  major_peak_info)
 	# Plot the ridge list
-	baselineWavelet::plotRidgeList(ridge_list)
+	plotRidgeList(ridge_list)
 	
 	# Make the data.frame with the corrected data columns. 
 	vibration_df <- vibration_df %>% 
 	  dplyr::mutate(
 	    # Make background a new column based on intensity column
-	    background = baselineWavelet::baselineCorrectionCWT(
+	    background = baselineCorrectionCWT(
 	      intensity,
 	      peak_width,
 	      lambda = 1000,
@@ -200,22 +235,21 @@ read_n_correct <- function(filename,
 	                             intensity, 
 	                             f = 0.03)$x, 
 	    # Save new column that says which are major peaks
-	    major_peak = (1:nrow(.) %in% major_peak_info$peakIndex)
+	    major_peak = (1:nrow(.) %in% major_peak_info$peakIndex), 
+	    wavenumber = as.numeric(wavenumber)
 	    ) %>% 
-	  # Filter out wavenumbers larger or smaller
-	  dplyr::filter(wavenumber >= as.numeric(wavenum_min) - 10, 
-	                wavenumber <= as.numeric(wavenum_max) + 10)
-
+	  dplyr::filter(wavenumber > wavenum_min, 
+	                wavenumber < wavenum_max) 
+	
 	# Return the data.frame with the corrected columns
 	return(vibration_df)
 }
 ```
 
-Function for plotting the individual peaks.
+Function for plotting the individual peaks
 
 ```{r}
-plot_ind_peaks <- function(vibration_df, 
-                           x_interval = 200) {
+plot_ind_peaks <- function(vibration_df) {
   # Given a vibration data.frame that has been corrected already using 
   # `read_n_correct` function, make an individual peak shape for ultimate plot
   #
@@ -223,7 +257,9 @@ plot_ind_peaks <- function(vibration_df,
   #   vibration_df : A corrected vibration dataset as a data.frame with 
   #                  `corrected_intensity`, `wavenumber` and `major_peak` as 
   #                  columns. 
-  #   x_interval: A number indicating what interval you want ticks on the x axis
+  #   x_lab: x axis label 
+  #   y_lab: y axis label
+  #
   # Returns:
   # A data.frame with background corrected intensities. 
   
@@ -231,13 +267,13 @@ plot_ind_peaks <- function(vibration_df,
 	ggplot2::ggplot(vibration_df) + 
 	  ggplot2::geom_line(ggplot2::aes(x = wavenumber, 
 	                                  y = corrected_intensity)) +
+	  ggplot2::geom_point(data = subset(vibration_df, major_peak), 
+	                      ggplot2::aes(x = wavenumber, 
+	                                   y = corrected_intensity, 
+	                                   shape = major_peak)) +
 	  ggplot2::theme_classic() + 
-    # Set ticks for every 300
-    ggplot2::scale_x_continuous(
-      breaks = signif(seq(from = min(vibration_df$wavenumber),
-                          to = max(vibration_df$wavenumber), 
-                          by = x_interval), 
-                      digits = 2)) + 
+    ggplot2::xlim(c(round(min(vibration_df$wavenumber)), 
+                    round(max(vibration_df$wavenumber)))) +
     ggplot2::xlab("") + 
     ggplot2::ylab("") +
     # Make everything blank because we just want the peak shape
@@ -295,14 +331,19 @@ Use the specialized function to import and correct the data from each file.
 ```{r}
 # Read, background correct, and identify peaks of each sample
 corrected_datasets <- apply(sample_df, 1, 
-                            function(file_row) {
-                            read_n_correct(filename = file_row['input_files'], 
-                                           wavenum_min = tibble::deframe(file_row['wave_min']),
-                                           wavenum_max = tibble::deframe(file_row['wave_max']))
+                            function(file) {
+                            read_n_correct(filename = file['input_files'], 
+                                           wavenum_min = file['wave_min'],
+                                           wavenum_max = file['wave_max'])
                               })
 
 # Bring along the sample labels
-names(corrected_datasets) <- paste0(sample_df$pressure, sample_df$range, each = "")
+names(corrected_datasets) <- paste0(sample_df$pressure, 
+                            "GPa",
+                            sample_df$wave_min,
+                            "-", 
+                            sample_df$wave_max,
+                            each = "")
 ```
 
 ## Obtain a individual plot for each corrected dataset
@@ -312,7 +353,10 @@ peak_plots <- lapply(corrected_datasets,
                      plot_ind_peaks)
 
 names(peak_plots) <- paste0(sample_df$pressure, 
-                            sample_df$range, 
+                            "GPa",
+                            sample_df$wave_min,
+                            "-", 
+                            sample_df$wave_max,
                             each = "")
 ```
 
@@ -329,30 +373,18 @@ Assemble first row.
 
 ```{r}
 first_row <- 
-  remove_axes(peak_plots$`20GPalow`)  +
-  remove_axes(peak_plots$`20GPamid`) + 
-  remove_axes(peak_plots$`20GPahigh`)  +
-   plot_layout(
-    widths = c(sample_df %>% 
-                 dplyr::filter(pressure == "20GPa")%>% 
-                 dplyr::pull(width)
-               ) # Make widths relative 
-    ) 
+  remove_x_axis(peak_plots$`2.914GPa200-1310`)  +
+  remove_axes(peak_plots$`2.914GPa1500-1875`) + 
+  remove_axes(peak_plots$`2.914GPa2800-3500`)
 ```
 
 Assemble second row. 
 
 ```{r}
 second_row <- 
-  remove_y_axis(peak_plots$`40GPalow`) +  
-  remove_y_axis(peak_plots$`40GPamid`) +
-  remove_y_axis(peak_plots$`40GPahigh`) +
-   plot_layout(
-    widths = c(sample_df %>% 
-                 dplyr::filter(pressure == "40GPa")%>% 
-                 dplyr::pull(width)
-               ) # Make widths relative 
-    ) 
+  peak_plots$`5.48GPa200-1310` +  
+  remove_y_axis(peak_plots$`5.48GPa1500-1875`) +
+  remove_y_axis(peak_plots$`5.48GPa2800-3500`)
 ```
 
 ### Combine rows
@@ -414,8 +446,6 @@ Add title.
 ultimate_plot <- ultimate_plot + 
   plot_annotation(
   title = ggplot2::element_text(main_title),
-  theme = ggplot2::theme(
-    plot.title = ggplot2::element_text(hjust = 0.5))
   )
 ```
 
@@ -423,6 +453,8 @@ Print out preview of the final plot.
 
 ```{r}
 ultimate_plot
+
+corrected_datasets$`2.914GPa200-1310`
 ```
 
 Save plot to a png
@@ -431,8 +463,7 @@ Save plot to a png
 ggplot2::ggsave(
   filename = file.path(plots_dir, plot_filename), 
   plot = ultimate_plot, 
-  width = 10, 
-  dpi = 600)
+  width = 10)
 ```
 
 ## Session Info
