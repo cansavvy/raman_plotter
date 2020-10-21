@@ -19,7 +19,8 @@ if (!("tidyverse" %in% installed.packages())){
 }
 
 if (!("baselineWavelet" %in% installed.packages())){
-  devtools::install_github("zmzhang/baselineWavelet")
+  install.packages(file.path("zmzhang-baselineWavelet-4.0.2-9-ga5cad6b.tar.gz"), 
+                 repos = NULL, type = "source")
 }
 
 if (!("patchwork" %in% installed.packages())){
@@ -29,6 +30,7 @@ devtools::install_github("thomasp85/patchwork")
 # magrittr pipe
 `%>%` <- dplyr::`%>%`
 
+library(baselineWavelet)
 library(Matrix)
 library(patchwork)
 ```
@@ -144,7 +146,8 @@ knitr::kable(sample_df %>% dplyr::select(pressure, wavelength, wave_min, wave_ma
 ```{r}
 read_n_correct <- function(filename, 
                            wavenum_min, 
-                           wavenum_max) {
+                           wavenum_max, 
+                           return_plots = FALSE) {
   # Will background correct and identify peaks for a given vibration dataset 
   # saved as a CSV file from
   #
@@ -154,6 +157,7 @@ read_n_correct <- function(filename,
   #   wavenum_min/max : two numbers which specify the range of numbers to keep in 
   #                    the dataset. Wavenumbers outside these ranges will be 
   #                    removed from the data.frame
+  #   return_plots: TRUE/FALSE should the plots be returned?
   #
   # Returns:
   # A data.frame with background corrected intensities and peaks identified. 
@@ -180,8 +184,20 @@ read_n_correct <- function(filename,
                                    scales = scales, 
                                    # Which wavelet base to use
                                    wavelet = 'mexh')
-  # Make this dat into an image
-	print(
+  
+  # Identify the local maximum of each column in 2-D CWT coefficients matrix
+	# by using a slide window
+	local_max <- getLocalMaximumCWT(w_coefs, 
+	                                # Minimum window 
+	                                minWinSize = 0.5)
+	
+  # Identify ridges by connecting the local maximum of 2-D 
+	ridge_list <- getRidge(local_max,
+	                       gapTh = 3, 
+	                       skip = NULL)
+  if (return_plots) {
+    # Make this dat into an image
+	   print(
 	  image(1:nrow(w_coefs), 
 	        scales,
 	        w_coefs, 
@@ -190,30 +206,21 @@ read_n_correct <- function(filename,
 	        xlab = 'index', 
 	        ylab = 'CWT coefficient scale', 
 	        main = 'CWT coefficients')
-	)
-
-	# Identify the local maximum of each column in 2-D CWT coefficients matrix
-	# by using a slide window
-	local_max <- getLocalMaximumCWT(w_coefs, 
-	                                # Minimum window 
-	                                minWinSize = 0.5)
-  # Identify ridges by connecting the local maximum of 2-D 
-	ridge_list <- getRidge(local_max,
-	                       gapTh = 3, 
-	                       skip = NULL)
-	
-	# Identify the major peaks
+	  )
+	  
+	  # Plot the ridge list
+	  plotRidgeList(ridge_list)
+  }
+  # Identify the major peaks
 	major_peak_info <- identifyMajorPeaks(vibration_df$intensity,
-	                                                       ridge_list,
-	                                                       w_coefs,
-	                                                       SNR.Th = 0.2,
-	                                                       ridgeLength = 1,
-	                                                       nearbyPeak = TRUE)
-	# Estimate peak width
+	                                      ridge_list,
+	                                      w_coefs,
+	                                      SNR.Th = 0.2,
+	                                      ridgeLength = 1,
+	                                      nearbyPeak = TRUE)
+  # Estimate peak width
 	peak_width <- widthEstimationCWT(vibration_df$intensity,
-	                                                  major_peak_info)
-	# Plot the ridge list
-	plotRidgeList(ridge_list)
+	                                 major_peak_info)
 	
 	# Make the data.frame with the corrected data columns. 
 	vibration_df <- vibration_df %>% 
@@ -241,7 +248,7 @@ read_n_correct <- function(filename,
 	  dplyr::filter(wavenumber > wavenum_min, 
 	                wavenumber < wavenum_max) 
 	
-	# Return the data.frame with the corrected columns
+	# Return the corrected and filtered dataset
 	return(vibration_df)
 }
 ```
@@ -267,10 +274,6 @@ plot_ind_peaks <- function(vibration_df) {
 	ggplot2::ggplot(vibration_df) + 
 	  ggplot2::geom_line(ggplot2::aes(x = wavenumber, 
 	                                  y = corrected_intensity)) +
-	  ggplot2::geom_point(data = subset(vibration_df, major_peak), 
-	                      ggplot2::aes(x = wavenumber, 
-	                                   y = corrected_intensity, 
-	                                   shape = major_peak)) +
 	  ggplot2::theme_classic() + 
     ggplot2::xlim(c(round(min(vibration_df$wavenumber)), 
                     round(max(vibration_df$wavenumber)))) +
@@ -278,7 +281,7 @@ plot_ind_peaks <- function(vibration_df) {
     ggplot2::ylab("") +
     # Make everything blank because we just want the peak shape
     ggplot2::theme(legend.position = "none", 
-                   axis.line = ggplot2::element_blank()) 
+                   axis.line.y = ggplot2::element_blank()) 
 }
 ```
 
@@ -289,7 +292,8 @@ remove_x_axis <- function(gplot) {
   gplot <- gplot + ggplot2::theme(
   axis.title.x = ggplot2::element_blank(),
   axis.text.x = ggplot2::element_blank(),
-  axis.ticks.x = ggplot2::element_blank())
+  axis.ticks.x = ggplot2::element_blank(),
+  axis.line.x = ggplot2::element_blank())
   
   return(gplot)
 }
@@ -318,8 +322,22 @@ remove_axes <- function(gplot) {
   axis.ticks.y = ggplot2::element_blank(), 
   axis.title.x = ggplot2::element_blank(),
   axis.text.x = ggplot2::element_blank(),
-  axis.ticks.x = ggplot2::element_blank())
+  axis.ticks.x = ggplot2::element_blank(),
+  axis.line.x = ggplot2::element_blank())
   
+  return(gplot)
+}
+```
+
+```{r}
+add_text_labels <- function(gplot, text) {
+  gplot <- gplot + 
+    ggplot2::annotate("text", 
+                      label = text, 
+                      x = max(gplot$data$wavenumber) - 150, 
+                      y = max(gplot$data$corrected_intensity), 
+                      size = 5, 
+                      colour = "black")
   return(gplot)
 }
 ```
@@ -333,8 +351,8 @@ Use the specialized function to import and correct the data from each file.
 corrected_datasets <- apply(sample_df, 1, 
                             function(file) {
                             read_n_correct(filename = file['input_files'], 
-                                           wavenum_min = file['wave_min'],
-                                           wavenum_max = file['wave_max'])
+                                           wavenum_min = as.numeric(file['wave_min']),
+                                           wavenum_max = as.numeric(file['wave_max']))
                               })
 
 # Bring along the sample labels
@@ -373,25 +391,28 @@ Assemble first row.
 
 ```{r}
 first_row <- 
-  remove_x_axis(peak_plots$`2.914GPa200-1310`)  +
-  remove_axes(peak_plots$`2.914GPa1500-1875`) + 
-  remove_axes(peak_plots$`2.914GPa2800-3500`)
+  remove_y_axis(peak_plots$`2.914GPa200-1310`)  +
+  remove_y_axis(peak_plots$`2.914GPa1500-1875`) + 
+  remove_y_axis(peak_plots$`2.914GPa2800-3500`)
 ```
 
 Assemble second row. 
 
 ```{r}
 second_row <- 
-  peak_plots$`5.48GPa200-1310` +  
-  remove_y_axis(peak_plots$`5.48GPa1500-1875`) +
-  remove_y_axis(peak_plots$`5.48GPa2800-3500`)
+  remove_axes(peak_plots$`5.48GPa200-1310`) +  
+  remove_axes(peak_plots$`5.48GPa1500-1875`) +
+  remove_axes(peak_plots$`5.48GPa2800-3500`)
 ```
 
 ### Combine rows
 
 ```{r}
-ultimate_plot <- first_row / second_row 
+ultimate_plot <- 
+  add_text_labels(second_row, text = "5.48 GPa") /
+  add_text_labels(first_row, text = "2.914 GPa")
 ```
+
 
 ## Add annotation labels
 
@@ -453,8 +474,6 @@ Print out preview of the final plot.
 
 ```{r}
 ultimate_plot
-
-corrected_datasets$`2.914GPa200-1310`
 ```
 
 Save plot to a png
