@@ -19,20 +19,37 @@ if (!("tidyverse" %in% installed.packages())){
 }
 
 if (!("baselineWavelet" %in% installed.packages())){
-  install.packages(file.path("zmzhang-baselineWavelet-4.0.2-9-ga5cad6b.tar.gz"), 
-                 repos = NULL, type = "source")
+  package_file <- file.path("util", "zmzhang-baselineWavelet-4.0.2-9.zip")
+  
+  # Download the package
+  download.file("https://github.com/zmzhang/baselineWavelet/archive/981c41095f5b4aaedf06bbcb2f4366acd467d1f0.zip", 
+                destfile = package_file)
+  3 
+  install.packages(package_file, 
+                   repos = NULL, type = "source")
 }
 
 if (!("patchwork" %in% installed.packages())){
-devtools::install_github("thomasp85/patchwork")
+  devtools::install_github("thomasp85/patchwork")
 }
+```
 
+Attach libraries we need. 
+
+```{r}
 # magrittr pipe
 `%>%` <- dplyr::`%>%`
 
 library(baselineWavelet)
 library(Matrix)
 library(patchwork)
+```
+
+Import special functions. 
+
+```{r}
+source(file.path("util", "read_n_correct.R"))
+source(file.path("util", "plotting_wrappers.R"))
 ```
 
 ### Directories and Files
@@ -56,14 +73,22 @@ Any files that are in this directory will be run.
 
 ```{r}
 # Path to input directory
-input_dir <- "MAD-X1"
+input_dir <- "input_data"
+
+# Check that what you supplied exists
+dir.exists(input_dir)
 ```
+
+Get all the file names!
 
 ```{r}
 # Get the list of files from here
 input_files <- list.files(input_dir, 
                           pattern="^.*\\.(csv|CSV)$", 
                           full.names = TRUE)
+
+# Test if all files found?
+all(sapply(input_files, file.exists))
 ```
 
 Collect experiment information from the file names.
@@ -71,14 +96,24 @@ Collect experiment information from the file names.
 ```{r}
 input_df <- data.frame(input_files) %>%
   # Split up file names into multiple columns so we can handle it easier
-  tidyr::separate(input_files, sep = "_", into = c("file_path", "name", "pressure_pt", "pressure", "wavelength")) %>% 
+  tidyr::separate(input_files, sep = "_", 
+                  into = c("file_path", 
+                           "name", 
+                           "pressure_pt", 
+                           "pressure", 
+                           "wavelength"
+                           )) %>% 
   # Save input file paths as their own column too
   dplyr::mutate(input_files = input_files, 
                 pressure = as.numeric(stringr::str_remove(pressure, " GPa"))) %>% 
   # Filter to only sets that have P (not dP)
   dplyr::filter(grepl("^P", pressure_pt)) %>%
   # Select only the columns we'll move forward with
-  dplyr::select(input_files, pressure_pt, pressure, wavelength)
+  dplyr::select(input_files, 
+                pressure_pt, 
+                pressure, 
+                wavelength
+                )
 
 input_df
 ```
@@ -139,207 +174,6 @@ sample_df <- input_df %>%
 
 # Print out the table so it can be double checked
 knitr::kable(sample_df %>% dplyr::select(pressure, wavelength, wave_min, wave_max))
-```
-
-## Set up special functions
-
-```{r}
-read_n_correct <- function(filename, 
-                           wavenum_min, 
-                           wavenum_max, 
-                           return_plots = FALSE) {
-  # Will background correct and identify peaks for a given vibration dataset 
-  # saved as a CSV file from
-  #
-  # Args:
-  #   filename : A file path to to a vibration CSV file that has two columns
-  #             The first column is wavenumber and the second is intensity.
-  #   wavenum_min/max : two numbers which specify the range of numbers to keep in 
-  #                    the dataset. Wavenumbers outside these ranges will be 
-  #                    removed from the data.frame
-  #   return_plots: TRUE/FALSE should the plots be returned?
-  #
-  # Returns:
-  # A data.frame with background corrected intensities and peaks identified. 
-  # Get file.path
-  # 
-  filename <- file.path(filename)
-  
-  # Check if the file actually exists
-  if(!file.exists(filename)){
-    stop(paste("No file at the given file path."))
-  }
-  
-  # Read in the CSV data file colnames will be ignored
-  vibration_df <- readr::read_csv(filename, col_names = FALSE) %>% 
-    # Save the sensible column names
-    dplyr::rename("wavenumber" = X1, 
-                  "intensity" = X2) 
-  # Establish the scale
-  scales <- seq(1, 120, 1)
-  
-  # Find Continuous Wavelet Transform
-  w_coefs <-  cwt(vibration_df$intensity,
-                                   # The scales at which to perform CWT
-                                   scales = scales, 
-                                   # Which wavelet base to use
-                                   wavelet = 'mexh')
-  
-  # Identify the local maximum of each column in 2-D CWT coefficients matrix
-	# by using a slide window
-	local_max <- getLocalMaximumCWT(w_coefs, 
-	                                # Minimum window 
-	                                minWinSize = 0.5)
-	
-  # Identify ridges by connecting the local maximum of 2-D 
-	ridge_list <- getRidge(local_max,
-	                       gapTh = 3, 
-	                       skip = NULL)
-  if (return_plots) {
-    # Make this dat into an image
-	   print(
-	  image(1:nrow(w_coefs), 
-	        scales,
-	        w_coefs, 
-	        col = rainbow(256), 
-	        axes = FALSE, 
-	        xlab = 'index', 
-	        ylab = 'CWT coefficient scale', 
-	        main = 'CWT coefficients')
-	  )
-	  
-	  # Plot the ridge list
-	  plotRidgeList(ridge_list)
-  }
-  # Identify the major peaks
-	major_peak_info <- identifyMajorPeaks(vibration_df$intensity,
-	                                      ridge_list,
-	                                      w_coefs,
-	                                      SNR.Th = 0.2,
-	                                      ridgeLength = 1,
-	                                      nearbyPeak = TRUE)
-  # Estimate peak width
-	peak_width <- widthEstimationCWT(vibration_df$intensity,
-	                                 major_peak_info)
-	
-	# Make the data.frame with the corrected data columns. 
-	vibration_df <- vibration_df %>% 
-	  dplyr::mutate(
-	    # Make background a new column based on intensity column
-	    background = baselineCorrectionCWT(
-	      intensity,
-	      peak_width,
-	      lambda = 1000,
-	      differences = 1),
-	    # Save corrected intensity as a new column 
-	    corrected_intensity = intensity - background, 
-	    # Save binned column
-	    binned = lowess(wavenumber, 
-	                    corrected_intensity, 
-	                    f = 0.03)$x, 
-	    # Save uncorrected bin column
-	    uncorrected_bin = lowess(wavenumber, 
-	                             intensity, 
-	                             f = 0.03)$x, 
-	    # Save new column that says which are major peaks
-	    major_peak = (1:nrow(.) %in% major_peak_info$peakIndex), 
-	    wavenumber = as.numeric(wavenumber)
-	    ) %>% 
-	  dplyr::filter(wavenumber > wavenum_min, 
-	                wavenumber < wavenum_max) 
-	
-	# Return the corrected and filtered dataset
-	return(vibration_df)
-}
-```
-
-Function for plotting the individual peaks
-
-```{r}
-plot_ind_peaks <- function(vibration_df) {
-  # Given a vibration data.frame that has been corrected already using 
-  # `read_n_correct` function, make an individual peak shape for ultimate plot
-  #
-  # Args:
-  #   vibration_df : A corrected vibration dataset as a data.frame with 
-  #                  `corrected_intensity`, `wavenumber` and `major_peak` as 
-  #                  columns. 
-  #   x_lab: x axis label 
-  #   y_lab: y axis label
-  #
-  # Returns:
-  # A data.frame with background corrected intensities. 
-  
-  # Make a plot with no axises or other stuff, but has the peaks
-	ggplot2::ggplot(vibration_df) + 
-	  ggplot2::geom_line(ggplot2::aes(x = wavenumber, 
-	                                  y = corrected_intensity)) +
-	  ggplot2::theme_classic() + 
-    ggplot2::xlim(c(round(min(vibration_df$wavenumber)), 
-                    round(max(vibration_df$wavenumber)))) +
-    ggplot2::xlab("") + 
-    ggplot2::ylab("") +
-    # Make everything blank because we just want the peak shape
-    ggplot2::theme(legend.position = "none", 
-                   axis.line.y = ggplot2::element_blank()) 
-}
-```
-
-Make quick little functions that remove axis ticks and labels. 
-
-```{r}
-remove_x_axis <- function(gplot) {
-  gplot <- gplot + ggplot2::theme(
-  axis.title.x = ggplot2::element_blank(),
-  axis.text.x = ggplot2::element_blank(),
-  axis.ticks.x = ggplot2::element_blank(),
-  axis.line.x = ggplot2::element_blank())
-  
-  return(gplot)
-}
-```
-
-Same kind of function but for y axis. 
-
-```{r}
-remove_y_axis <- function(gplot) {
-  gplot <- gplot + ggplot2::theme(
-  axis.title.y = ggplot2::element_blank(),
-  axis.text.y = ggplot2::element_blank(),
-  axis.ticks.y = ggplot2::element_blank())
-  
-  return(gplot)
-}
-```
-
-Wrapper function that does both. 
-
-```{r}
-remove_axes <- function(gplot) {
-  gplot <- gplot + ggplot2::theme(
-  axis.title.y = ggplot2::element_blank(),
-  axis.text.y = ggplot2::element_blank(),
-  axis.ticks.y = ggplot2::element_blank(), 
-  axis.title.x = ggplot2::element_blank(),
-  axis.text.x = ggplot2::element_blank(),
-  axis.ticks.x = ggplot2::element_blank(),
-  axis.line.x = ggplot2::element_blank())
-  
-  return(gplot)
-}
-```
-
-```{r}
-add_text_labels <- function(gplot, text) {
-  gplot <- gplot + 
-    ggplot2::annotate("text", 
-                      label = text, 
-                      x = max(gplot$data$wavenumber) - 150, 
-                      y = max(gplot$data$corrected_intensity), 
-                      size = 5, 
-                      colour = "black")
-  return(gplot)
-}
 ```
 
 ## Run each data file through the correction algorithms
@@ -412,7 +246,6 @@ ultimate_plot <-
   add_text_labels(second_row, text = "5.48 GPa") /
   add_text_labels(first_row, text = "2.914 GPa")
 ```
-
 
 ## Add annotation labels
 
