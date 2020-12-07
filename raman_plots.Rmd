@@ -66,14 +66,14 @@ if (!dir.exists(plots_dir)) {
 }
 
 # Call the plot what you would like it to be saved as
-plot_filename <- "raman_plot.png"
+plot_filename <- file.path(plots_dir, "raman_plot.png")
 ```
 
 Any files that are in this directory will be run. 
 
 ```{r}
 # Path to input directory
-input_dir <- "input_data"
+input_dir <- file.path("input_data")
 
 # Check that what you supplied exists
 dir.exists(input_dir)
