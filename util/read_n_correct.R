@@ -36,15 +36,16 @@ read_n_correct <- function(filename,
     # Save the sensible column names
     dplyr::rename("wavenumber" = X1,
                   "intensity" = X2)
+  
   # Establish the scale
   scales <- seq(1, 120, 1)
 
   # Find Continuous Wavelet Transform
   w_coefs <-  cwt(vibration_df$intensity,
-                                   # The scales at which to perform CWT
-                                   scales = scales,
-                                   # Which wavelet base to use
-                                   wavelet = 'mexh')
+                  # The scales at which to perform CWT
+                  scales = scales,
+                  # Which wavelet base to use
+                  wavelet = 'mexh')
 
   # Identify the local maximum of each column in 2-D CWT coefficients matrix
 	# by using a slide window

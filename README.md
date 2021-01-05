@@ -14,7 +14,7 @@ Step 4) Click on the `raman_plots.Rmd` file.
 
 Step 5) Run all the chunks up until `Directories and Files` section.
 
-Step 6) In line 69 replace `"raman_plot.png"` with what you would like the plot to be called.
+Step 6) In line 69 replace `"raman_plot.png"` with what you would like the plot to be called. Run this chunk and each chunk as you go along.
 
 Step 7) In line 76 replace `"input_data"` with the file path to your data that you placed in Step 3.
 

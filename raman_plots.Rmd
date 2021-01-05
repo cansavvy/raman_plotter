@@ -24,7 +24,7 @@ if (!("baselineWavelet" %in% installed.packages())){
   # Download the package
   download.file("https://github.com/zmzhang/baselineWavelet/archive/981c41095f5b4aaedf06bbcb2f4366acd467d1f0.zip", 
                 destfile = package_file)
-  3 
+  
   install.packages(package_file, 
                    repos = NULL, type = "source")
 }
@@ -66,14 +66,14 @@ if (!dir.exists(plots_dir)) {
 }
 
 # Call the plot what you would like it to be saved as
-plot_filename <- file.path(plots_dir, "raman_plot.png")
+plot_filename <- file.path(plots_dir, "<PLOT_NAME>")
 ```
 
 Any files that are in this directory will be run. 
 
 ```{r}
 # Path to input directory
-input_dir <- file.path("input_data")
+input_dir <- file.path("<FOLDER_NAME>")
 
 # Check that what you supplied exists
 dir.exists(input_dir)
@@ -133,14 +133,14 @@ input_df
 Where there's a 2800 and a 3200 for an individual pressure, only keep the 3200 file. 
 
 ```{r}
-too_many <- input_df %>%
-  dplyr::group_by(pressure)%>%
-  dplyr::summarize(n = dplyr::n()) %>% 
-  dplyr::filter(n > 3) %>% 
-  dplyr::pull(pressure)
+#too_many <- input_df %>%
+#  dplyr::group_by(pressure)%>%
+#  dplyr::summarize(n = dplyr::n()) %>% 
+#  dplyr::filter(n > 3) %>% 
+#  dplyr::pull(pressure)
 
-input_df <- input_df %>% 
-  dplyr::filter(!(pressure == too_many & wavelength == 2800))
+#input_df <- input_df %>% 
+#  dplyr::filter(!(pressure == too_many & wavelength == 2800))
 ```
 
 Print out the final version of the data frame with the input files. 
@@ -160,17 +160,14 @@ samples being plotted.
 # Make a data.frame with each samples' information
 sample_df <- input_df %>%
   dplyr::mutate(wave_min = dplyr::recode(wavelength, 
-                          "375" = 200, 
-                          "2275" = 1500, 
-                          "2800" = 2800, 
-                          "3200" = 2800
-                        ),
+                          "375" = 290, 
+                          "2275" = 1400, 
+                          "2800" = 2800),
                 wave_max = dplyr::recode(wavelength, 
                           "375" = 1310, 
                           "2275" = 1875, 
-                          "2800" = 3500, 
-                          "3200" = 3500)
-                ) 
+                          "2800" = 3400) 
+                          ) 
 
 # Print out the table so it can be double checked
 knitr::kable(sample_df %>% dplyr::select(pressure, wavelength, wave_min, wave_max))
@@ -215,92 +212,15 @@ names(peak_plots) <- paste0(sample_df$pressure,
 ## Assemble the main plot
 
 Put together all the peak plots into one grid. 
-Assemble by row. 
-
-```{r}
-n_rows <- 2
-```
-
-Assemble first row. 
-
-```{r}
-first_row <- 
-  remove_y_axis(peak_plots$`2.914GPa200-1310`)  +
-  remove_y_axis(peak_plots$`2.914GPa1500-1875`) + 
-  remove_y_axis(peak_plots$`2.914GPa2800-3500`)
-```
-
-Assemble second row. 
-
-```{r}
-second_row <- 
-  remove_axes(peak_plots$`5.48GPa200-1310`) +  
-  remove_axes(peak_plots$`5.48GPa1500-1875`) +
-  remove_axes(peak_plots$`5.48GPa2800-3500`)
-```
-
-### Combine rows
+This custom function assembles the individual plots where each row is a pressure. 
 
 ```{r}
 ultimate_plot <- 
-  add_text_labels(second_row, text = "5.48 GPa") /
-  add_text_labels(first_row, text = "2.914 GPa")
-```
-
-## Add annotation labels
-
-Declare x and y labels and main title. 
-
-```{r}
-# Declare the main title
-main_title <- "The background-correction of Raman Spectra"
-
-# Declare x label
-x_lab <- "Wavelength / nm"
-
-# Declare y label
-y_lab <- "Raman Intensity/Arbitr. Units"
-```
-
-Set up the formatting of our x and y labels. 
-
-```{r}
-x_lab <- wrap_elements(grid::textGrob(x_lab)) + 
-  ggplot2::theme(
-    plot.margin = ggplot2::unit(c(.001, .001, .001, .001), "cm")
-    )
-
-y_lab <- wrap_elements(grid::textGrob(y_lab, rot = 90)) + 
-  ggplot2::theme(
-    plot.margin = ggplot2::unit(c(.01, .01, .01, .01), "cm")
-    )
-```
-
-Tack on the axis labels first.
-
-```{r}
-ultimate_plot <- 
-  # Start with y label
-  (y_lab + ultimate_plot) +
-   plot_layout(
-    widths = c(0.15, 5) # Adjust spacing 
-    ) 
-
-ultimate_plot <- 
-  (ultimate_plot / x_lab) + 
-  # Adjust spacing 
-  plot_layout(
-    heights = c(5, 0.5) # Adjust spacing 
-    )
-```
-
-Add title. 
-
-```{r}
-ultimate_plot <- ultimate_plot + 
-  plot_annotation(
-  title = ggplot2::element_text(main_title),
-  )
+  assemble_main_plot(peak_plots_list = peak_plots,
+                     row_pressures = input_df$pressure,
+                     main_title = "The background-correction of Raman Spectra",
+                     x_lab = "Wavelength / nm",
+                     y_lab = "Raman Intensity/Arbitr. Units")
 ```
 
 Print out preview of the final plot. 
@@ -313,9 +233,10 @@ Save plot to a png
 
 ```{r}
 ggplot2::ggsave(
-  filename = file.path(plots_dir, plot_filename), 
+  filename = file.path(plot_filename), 
   plot = ultimate_plot, 
-  width = 10)
+  width = 10, 
+  height = 12)
 ```
 
 ## Session Info
