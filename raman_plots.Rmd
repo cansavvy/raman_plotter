@@ -66,14 +66,14 @@ if (!dir.exists(plots_dir)) {
 }
 
 # Call the plot what you would like it to be saved as
-plot_filename <- file.path(plots_dir, "<PLOT_NAME>")
+plot_filename <- file.path(plots_dir, "DNDIF_Raman combined_JCB-1-217.jpg")
 ```
 
 Any files that are in this directory will be run. 
 
 ```{r}
 # Path to input directory
-input_dir <- file.path("<FOLDER_NAME>")
+input_dir <- file.path("DNDIF Cell 6")
 
 # Check that what you supplied exists
 dir.exists(input_dir)
@@ -162,11 +162,14 @@ sample_df <- input_df %>%
   dplyr::mutate(wave_min = dplyr::recode(wavelength, 
                           "375" = 290, 
                           "2275" = 1400, 
-                          "2800" = 2800),
+                          "2800" = 2800) 
+                          #"3200" = 2800
+                        ,
                 wave_max = dplyr::recode(wavelength, 
                           "375" = 1310, 
                           "2275" = 1875, 
                           "2800" = 3400) 
+                          #"3200" = 3500)
                           ) 
 
 # Print out the table so it can be double checked
@@ -183,7 +186,11 @@ corrected_datasets <- apply(sample_df, 1,
                             function(file) {
                             read_n_correct(filename = file['input_files'], 
                                            wavenum_min = as.numeric(file['wave_min']),
-                                           wavenum_max = as.numeric(file['wave_max']))
+                                           wavenum_max = as.numeric(file['wave_max']), 
+                                           peak_threshold = 3,
+                                           ridge_length = 3, 
+                                           window_size = 80, 
+                                           min_cutoff = 290)
                               })
 
 # Bring along the sample labels
@@ -193,6 +200,25 @@ names(corrected_datasets) <- paste0(sample_df$pressure,
                             "-", 
                             sample_df$wave_max,
                             each = "")
+```
+
+## Save corrected data to CSV 
+
+```{r}
+corrected_data_df <- 
+  dplyr::bind_rows(corrected_datasets, .id = "pressure") %>% 
+  dplyr::mutate(pressure = as.numeric(stringr::word(pressure, sep = "GPa", 1))) 
+
+corrected_data_df %>% 
+  dplyr::mutate(row_id = 1:nrow(.)) %>% 
+  dplyr::select(row_id, pressure, wavenumber, intensity) %>%
+  tidyr::pivot_wider(id_cols = pressure, 
+                     names_from = pressure, 
+                     values_from = c(wavenumber, intensity), 
+                     values_fn = list(intensity = list, wavenumber = list)) %>% 
+  tidyr::unnest(cols = colnames(.)) %>%
+  dplyr::select(order(as.numeric(stringr::word(colnames(.), sep = "_", 2)))) %>%
+  readr::write_csv(file.path("DNDIF_Raman_Corrected_Data.csv"))
 ```
 
 ## Obtain a individual plot for each corrected dataset
@@ -218,9 +244,9 @@ This custom function assembles the individual plots where each row is a pressure
 ultimate_plot <- 
   assemble_main_plot(peak_plots_list = peak_plots,
                      row_pressures = input_df$pressure,
-                     main_title = "The background-correction of Raman Spectra",
-                     x_lab = "Wavelength / nm",
-                     y_lab = "Raman Intensity/Arbitr. Units")
+                     main_title = " ",
+                     x_lab = bquote('Raman Shift'~(cm^-1)),
+                     y_lab = "Intensity (Arb. Unit)")
 ```
 
 Print out preview of the final plot. 
@@ -237,6 +263,57 @@ ggplot2::ggsave(
   plot = ultimate_plot, 
   width = 10, 
   height = 12)
+```
+
+### Peak plot 
+
+```{r}
+peak_df <- corrected_data_df %>% 
+  dplyr::filter(major_peak) %>% 
+  dplyr::mutate(wavenumber_rounded = signif(wavenumber, digits = 2)) %>% 
+  dplyr::group_by(pressure) %>% 
+  dplyr::mutate(wavenum_order = order(wavenumber))
+```
+
+Write data to CSV. 
+
+```{r}
+pivot_pressure <- peak_df %>% 
+  dplyr::select(wavenum_order, pressure, wavenumber) %>% 
+  tidyr::spread(pressure, wavenumber) %>% 
+  dplyr::select(-wavenum_order) %>%
+  t() %>% 
+  as.data.frame() %>%
+  readr::write_csv(file.path("DNDIF_Raman Peak Shift Data_JCB-1-217_data.csv"))
+
+pivot_pressure
+```
+
+Let's cluster the peaks.
+
+```{r}
+pressure_wavenum_mat <- peak_df %>% 
+  dplyr::select(pressure, wavenumber) %>% 
+  as.matrix()
+
+clusters <- kmeans(pressure_wavenum_mat, centers = 9)
+
+pressure_wavenum_df <- data.frame(pressure_wavenum_mat, 
+                                  cluster = as.factor(clusters$cluster))
+
+ggplot2::ggplot(pressure_wavenum_df, 
+                ggplot2::aes(x = pressure, y = wavenumber, color = cluster)) +
+  ggplot2::geom_point() +
+  ggplot2::theme_classic()
+```
+
+
+```{r}
+ggplot2::ggplot(pressure_wavenum_df, 
+                ggplot2::aes(x = pressure, y = wavenumber)) +
+  ggplot2::geom_point(shape = "triangle", size = 3) + 
+  ggplot2::geom_line(ggplot2::aes(group = cluster)) +
+  ggplot2::theme_classic()
 ```
 
 ## Session Info
