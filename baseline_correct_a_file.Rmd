@@ -1,0 +1,106 @@
+---
+title: "Baseline Correction"
+author: "Candace Savonen"
+date: "2024-09-17"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Install hyperSpec
+
+This will only install if it isn't already installed.
+
+```{r}
+if (!"hyperSpec" %in% installed.packages()) {
+  install.packages("hyperSpec")
+}
+library(magrittr)
+library(hyperSpec)
+```
+
+This will ask you to specify the file you are trying to baseline correct.
+
+```{r}
+if (interactive()) {
+  data_file <- file.choose()
+} else {
+  data_file <- "/Users/jonathan.bennion/OneDrive - US Army/Documents/R/Files from Candy/DNDA-6_Pure_300 sec_10mW_center 2050 2024-05-15 12_37_26.csv"
+}
+```
+
+This will read in the file you specified as is.
+
+```{r}
+raw_data <- readr::read_csv(data_file,
+                            col_names = c("wavelength", "intensity"),
+                            col_types = "nn") %>% 
+  dplyr::filter(wavelength > 325) %>%
+  dplyr::filter(wavelength < 3100)
+```
+
+Set up special object from the raw data.
+
+```{r}
+spec_obj <- new(
+  "hyperSpec",
+  spc = t(raw_data),
+  wavelength = as.vector(raw_data$wavelength))
+
+
+sqrt_obj <- sqrt(rowMeans(spec_obj))
+```
+
+Plot it before we correct to see.
+
+```{r}
+plotspc(spec_obj)
+```
+
+Find the baseline:
+
+```{r}
+baseline1 <- spc.rubberband(spec_obj, noise = 10, df = 9)
+
+baseline2 <- spc.fit.poly.below(spec_obj, 
+                               poly.order = 5,
+                               debuglevel = 20, 
+                               stop.on.increase = FALSE)
+```
+
+Subtract the baseline
+
+```{r}
+corrected_data1 <- spec_obj - baseline1
+corrected_data2 <- spec_obj - baseline2
+```
+
+Plot it so we can take a look if its accurately corrected.
+
+After correction:
+
+```{r}
+plotspc(corrected_data1)
+```
+
+```{r}
+plotspc(corrected_data2)
+```
+
+```{r}
+corrected_data1_df <- data.frame(wavelength = corrected_data1@wavelength,
+                                 corrected_intensity = corrected_data1$spc[2,])
+corrected_data2_df <- data.frame(wavelength = corrected_data2@wavelength,
+                                 corrected_intensity = corrected_data1$spc[2,])
+
+readr::write_csv(corrected_data1_df, gsub(".csv$", "_bl1_baseline.csv", data_file))
+readr::write_csv(corrected_data2_df, gsub(".csv$", "_bl2_baseline.csv", data_file))
+```
+
+
+## Session Info
+This prints out what packages and versions were being used for this:
+
+```{r}
+sessionInfo()
+```
